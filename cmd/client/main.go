@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -32,9 +33,17 @@ func init() {
 }
 
 func main() {
-	fmt.Println("TCP Client started:")
+	if len(os.Args) < 2 {
+		fmt.Println("Please provide a server port")
+		return
+	}
 
-	conn, err := net.Dial("tcp", "localhost:8080")
+	port, err := strconv.Atoi(os.Args[1])
+	if err != nil {
+		fmt.Println("Invalid port number:", os.Args[1])
+	}
+
+	conn, err := net.Dial("tcp", fmt.Sprintf("172.22.139.83:%d", port))
 	if err != nil {
 		fmt.Println("An error occurred while connecting to the server:", err)
 		os.Exit(1)

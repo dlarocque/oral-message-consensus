@@ -30,11 +30,12 @@ type Db struct {
 
 // State of a peer in the network
 type Peer struct {
-	Host    string
-	Port    int
-	Name    string
-	Expires time.Time
-	Conn    net.Conn
+	Host        string
+	Port        int
+	Name        string
+	Expires     time.Time
+	Conn        net.Conn
+	RecentValue string // Most recent value received from peer
 }
 
 type PeerList []*Peer
@@ -85,26 +86,34 @@ type ConsensusReply struct {
 	PeplyTo uuid.UUID `json:"reply-to"`
 }
 
-func ConnectWithPeer(host string, port int, name string) (*Peer, error) {
+func (db *Db) ConnectWithPeer(host string, port int, name string) (*Peer, error) {
 	// Attempt to establish connection with the peer
-	addr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", host, port))
+	rAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", host, port))
 	if err != nil {
 		Debug(dError, "Error resolving address:", err)
 		return nil, err
 	}
 
-	conn, err := net.DialUDP("udp", nil, addr)
+	lAddr := &net.UDPAddr{
+		Port: db.self.Port,
+	}
+
+	conn, err := net.DialUDP("udp", lAddr, rAddr)
 	if err != nil {
 		Debug(dError, "Error connecting:", err)
 		return nil, err
 	}
 
+	fmt.Printf("Connected:\nPort %d\n", conn.LocalAddr().(*net.UDPAddr).Port)
+
 	peer := &Peer{
-		Host:    host,
-		Port:    port,
-		Name:    name,
-		Expires: time.Now().Add(time.Minute * 2),
-		Conn:    conn,
+		Host: host,
+		Port: port,
+
+		Name:        name,
+		Expires:     time.Now().Add(time.Minute * 2),
+		Conn:        conn,
+		RecentValue: "",
 	}
 
 	return peer, nil
@@ -164,15 +173,23 @@ func parseGossipReply(data []byte) (*GossipReply, error) {
 func (args *SetArgs) Json() ([]byte, error) {
 	jsonBytes, err := json.Marshal(args)
 	if err != nil {
-		err = errors.New(fmt.Sprintf("failed to marshal SetArgs to JSON: %s", err.Error()))
-		return nil, err
+		return nil, fmt.Errorf("failed to marshal SetArgs to JSON: %s", err.Error())
 	}
 
 	return jsonBytes, nil
 }
 
+func parseSetArgs(data []byte) (*SetArgs, error) {
+	args := &SetArgs{}
+	err := json.Unmarshal(data, args)
+	if err != nil {
+		return nil, fmt.Errorf("error decoding JSON: %v", err)
+	}
+	return args, nil
+}
+
 func (p *Peer) String() string {
-	str := fmt.Sprintf("(%s:%d - %s)", p.Host, p.Port, p.Name)
+	str := fmt.Sprintf("[%s - Recent Value: %s]", p.Name, p.RecentValue)
 	return str
 }
 
@@ -181,5 +198,5 @@ func (pl *PeerList) String() string {
 	for i, peer := range *pl {
 		peerStrs[i] = peer.String()
 	}
-	return fmt.Sprintf("[%v]", strings.Join(peerStrs, ", "))
+	return fmt.Sprintf("(%v)", strings.Join(peerStrs, ","))
 }

@@ -14,10 +14,13 @@ const (
 
 var (
 	knownHosts = []string{"silicon.cs.umanitoba.ca", "eagle.cs.umanitoba.ca", "hawk.cs.umanitoba.ca", "osprey.cs.umanitoba.ca"}
+	localHosts = []string{"127.0.0.1", "127.0.0.1", "127.0.0.1", "127.0.0.1"}
 	knownPort  = 16000
 )
 
 func main() {
+	knownHosts = localHosts // TEMP
+
 	localIP, err := db.GetLocalIP()
 	if err != nil {
 		fmt.Printf("Failed to get local IP: %v\n", err)

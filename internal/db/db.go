@@ -15,8 +15,10 @@ import (
 )
 
 var (
-	knownHosts = []string{"silicon.cs.umanitoba.ca", "eagle.cs.umanitoba.ca", "osprey.cs.umanitoba.ca", "hawk.cs.umanitoba.ca"}
-	// knownPorts = []int{14000, 14001, 14002, 14003}
+	knownHosts = []string{"silicon.cs.umanitoba.ca", "eagle.cs.umanitoba.ca", "hawk.cs.umanitoba.ca", "osprey.cs.umanitoba.ca"}
+	knownPort  = 16000
+	localHosts = []string{"127.0.0.1", "127.0.0.1", "127.0.0.1", "127.0.0.1"}
+	localPorts = []int{16000, 16001, 16002, 16003}
 )
 
 func Make(self *Peer, peers []*Peer, data []string) *Db {
@@ -100,13 +102,19 @@ func (db *Db) handleConnection(conn net.Conn) {
 
 		switch input {
 		case "peers":
-			// TODO: Implement 'peers' command.
+			db.mu.Lock()
+			res := db.peers.String()
+			fmt.Fprintln(conn, res)
+			db.mu.Unlock()
 		case "current":
-			// TODO: Implement 'current' command.
+			db.mu.Lock()
+			res := fmt.Sprintf("%v", db.data)
+			fmt.Fprintln(conn, res)
+			db.mu.Unlock()
 		case "lie":
-			// TODO: Implement 'lie' command.
+			// TODO: Implement 'lie' command
 		case "truth":
-			// TODO: Implement 'truth' command.
+			// TODO: Implement 'truth' command
 		case "exit":
 			fmt.Fprintln(conn, "Exited.")
 			return
@@ -122,16 +130,17 @@ func (db *Db) handleConnection(conn net.Conn) {
 			} else if strings.HasPrefix(input, "set ") {
 				parts := strings.Split(input, " ")
 				if len(parts) != 3 {
-					fmt.Fprintln(conn, "Invalid input. Please provide both index and word to set.")
+					fmt.Fprintln(conn, "Invalid input. Please provide both index and value to set.")
 				} else {
 					index, err := strconv.Atoi(parts[1])
 					if err != nil || index < 0 || index > 4 {
 						fmt.Fprintln(conn, "Invalid input. Please provide a single digit integer index in the range 0-4.")
 						continue
 					}
-					word := parts[2]
-					fmt.Fprintln(conn, "Sending SET command to all peers. Setting index", index, "to word", word)
-					// TODO: Implement 'set' command.
+					value := parts[2]
+					fmt.Fprintln(conn, "Sending SET command to all peers. Setting index", index, "to value", value)
+
+					go db.set(index, value)
 				}
 			} else {
 				fmt.Fprintln(conn, "Invalid input. Please try again.")
@@ -162,8 +171,9 @@ func (db *Db) join() {
 	db.gossipIDs = append(db.gossipIDs, args.MessageID)
 
 	// Send gossip to all the peers
-	for _, host := range knownHosts {
-		wellKnownPeer, err := ConnectWithPeer(host, 16000, host)
+	// TEMP
+	for idx, host := range localHosts {
+		wellKnownPeer, err := db.ConnectWithPeer(host, localPorts[idx], host)
 		if err != nil {
 			fmt.Printf("Error connecting to well-known peer: %v\n", err)
 			os.Exit(1)
@@ -194,11 +204,13 @@ func (db *Db) peerListener(conn *net.UDPConn) {
 
 	buf := make([]byte, 1024)
 	for {
-		n, _, err := conn.ReadFromUDP(buf)
+		n, addr, err := conn.ReadFromUDP(buf)
 		if err != nil {
 			Debug(dError, "UDP: Error reading: %v", err)
 			continue
 		}
+
+		fmt.Printf("Received message from port %d\n", addr.Port)
 
 		// Debug(dPeer, "Received %d bytes from %s: %s\n", n, addr.String(), string(buf[:n]))
 
@@ -241,7 +253,7 @@ func (db *Db) peerListener(conn *net.UDPConn) {
 				fmt.Println("GOSSIP from ", args.Name)
 
 				// Check if first time seeing peer
-				peerIdx := db.peerIdx(args.Host, args.Port, args.Name)
+				peerIdx := db.peerIdx(args.Host, args.Port)
 				if peerIdx == -1 {
 					Debug(dPeer, "First time seeing peer %s, adding to list of peers", args.Name)
 
@@ -251,7 +263,7 @@ func (db *Db) peerListener(conn *net.UDPConn) {
 						Debug(dError, "Failed to connect with new peer at (%s:%d)", args.Host, args.Port)
 					}
 
-					peerIdx := db.peerIdx(args.Host, args.Port, args.Name)
+					peerIdx := db.peerIdx(args.Host, args.Port)
 
 					// Relay message to 5 other randomly selected peers
 					perm := rand.Perm(len(db.peers) - 1)
@@ -314,7 +326,7 @@ func (db *Db) peerListener(conn *net.UDPConn) {
 				Debug(dPeer, "Received GOSSIP_REPLY command from (%s)", reply.Name)
 
 				// Add the peer if it does not already exist
-				peerIdx := db.peerIdx(reply.Host, reply.Port, reply.Name)
+				peerIdx := db.peerIdx(reply.Host, reply.Port)
 				if peerIdx == -1 {
 					err := db.addPeer(reply.Host, reply.Port, reply.Name)
 					if err != nil {
@@ -322,6 +334,26 @@ func (db *Db) peerListener(conn *net.UDPConn) {
 					}
 				} else {
 					db.peers[peerIdx].Expires = time.Now().Add(time.Second * 60 * 2)
+				}
+			} else if command == SET {
+				args, err := parseSetArgs(buf[:n])
+				if err != nil {
+					Debug(dError, "Failed to parse SET command JSON: %v", err)
+				}
+
+				Debug(dSet, "Received SET: (%d, %s)", args.Index, args.Value)
+
+				// Update the value in our database if the index is in bounds
+				if args.Index >= 0 && args.Index < 5 {
+					/*host, port := addr.IP.String(), remoteAddr.Port
+					peerIdx := db.peerIdx(host, port)
+					if peerIdx > -1 {
+						db.data[args.Index] = args.Value
+						db.peers[peerIdx].RecentValue = args.Value
+					} else {
+						Debug(dPeer, "Received SET from unknown peer at %s:%d", host, port)
+					}
+					*/
 				}
 			} else {
 				Debug(dPeer, "Received unknown command from peer")
@@ -334,10 +366,10 @@ func (db *Db) peerListener(conn *net.UDPConn) {
 }
 
 // With mutex, retrieve the index of peer with parameters, or -1 if it does not exist
-func (db *Db) peerIdx(host string, port int, name string) int {
+func (db *Db) peerIdx(host string, port int) int {
 	peerIdx := -1
 	for idx, peer := range db.peers {
-		if peer.Host == host && peer.Port == port && peer.Name == peer.Name {
+		if peer.Host == host && peer.Port == port {
 			peerIdx = idx
 		}
 	}
@@ -348,7 +380,7 @@ func (db *Db) peerIdx(host string, port int, name string) int {
 // With mutex, connect to a new peer and add it to the list of peers
 func (db *Db) addPeer(host string, port int, name string) error {
 	// Add to list of peers
-	newPeer, err := ConnectWithPeer(host, port, name)
+	newPeer, err := db.ConnectWithPeer(host, port, name)
 	if err != nil {
 		return err
 	}
@@ -403,15 +435,11 @@ func (db *Db) peerMaintainer() {
 			// if peer.Expires.After(time.Now()) {
 			if time.Since(peer.Expires) < 0 {
 				updatedPeers = append(updatedPeers, peer)
-			} else {
-				seconds := int(time.Since(peer.Expires).Milliseconds())
-				fmt.Printf("EXPIRED: %d seconds ago\n", seconds)
-				fmt.Printf("Removed %s\n", peer.Name)
 			}
 		}
 
 		db.peers = updatedPeers
-		fmt.Printf("Peers: %d\n", len(db.peers))
+		// fmt.Printf("Peers: %d\n", len(db.peers))
 
 		db.mu.Unlock()
 	}
@@ -428,20 +456,27 @@ func (db *Db) query(args QueryArgs) []string {
 // Goroutine that sets index in the database to new value, and sends
 // a SET command to all active peers.
 func (db *Db) set(index int, value string) {
-	/*
-		db.mu.Lock()
-		db.data[index] = value
-		db.mu.Unlock()
+	db.mu.Lock()
+	db.data[index] = value
+	Debug(dSet, "Updated database: %v", db.data)
 
-		args := &SetArgs{
-			Command: SET,
-			Index:   index,
-			Value:   value,
-		}
+	args := &SetArgs{
+		Command: SET,
+		Index:   index,
+		Value:   value,
+	}
 
-		for _, peer := range db.peers {
-			go db.sendSet(peer, args)
-		}
-	*/
+	jsonBytes, err := args.Json()
+	if err != nil {
+		Debug(dError, "Failed to parse set command: %v", err)
+	}
+
+	// Send the set command to all peers
+	for _, peer := range db.peers {
+		Debug(dSet, "Sent SET to %v", peer)
+		db.Send(peer, jsonBytes)
+	}
+
+	db.mu.Unlock()
 
 }
