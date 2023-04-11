@@ -22,6 +22,7 @@ const (
 	dInfo      logTopic = "INFO"
 	dTest      logTopic = "TEST"
 	dWarn      logTopic = "WARN"
+	dMessage   logTopic = "MESG"
 )
 
 var (

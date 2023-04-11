@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -12,15 +13,19 @@ import (
 )
 
 const (
-	GOSSIP = "GOSSIP"
+	GOSSIP       = "GOSSIP"
+	GOSSIP_REPLY = "GOSSIP_REPLY"
+	SET          = "SET"
 )
 
 // State of the peer to peer distributed database
 type Db struct {
-	mu    sync.Mutex
-	self  *Peer    // The information of this peer
-	peers []*Peer  // Known active peers
-	data  []string // Database of five values
+	mu        sync.Mutex
+	self      *Peer       // The information of this peer
+	peers     PeerList    // Known active peers
+	data      []string    // Database of five values
+	gossipIDs []uuid.UUID // UUIDs of all gossips we have seen
+	// consensusStates map[uuid.UUID]ConsensusArgs
 }
 
 // State of a peer in the network
@@ -31,6 +36,8 @@ type Peer struct {
 	Expires time.Time
 	Conn    net.Conn
 }
+
+type PeerList []*Peer
 
 type QueryArgs struct {
 	Command string `json:"command"` // Command name
@@ -96,11 +103,24 @@ func ConnectWithPeer(host string, port int, name string) (*Peer, error) {
 		Host:    host,
 		Port:    port,
 		Name:    name,
-		Expires: time.Now().Add(time.Second * 2),
+		Expires: time.Now().Add(time.Minute * 2),
 		Conn:    conn,
 	}
 
 	return peer, nil
+}
+
+func GetLocalIP() (string, error) {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return "", err
+	}
+	for _, address := range addrs {
+		if ipnet, ok := address.(*net.IPNet); ok && !ipnet.IP.IsLoopback() && ipnet.IP.To4() != nil {
+			return ipnet.IP.String(), nil
+		}
+	}
+	return "", errors.New("No local IP address")
 }
 
 func (args *GossipArgs) Json() ([]byte, error) {
@@ -123,6 +143,15 @@ func (args *GossipReply) Json() ([]byte, error) {
 	return jsonBytes, nil
 }
 
+func parseGossipArgs(data []byte) (*GossipArgs, error) {
+	reply := &GossipArgs{}
+	err := json.Unmarshal(data, reply)
+	if err != nil {
+		return nil, fmt.Errorf("error decoding JSON: %v", err)
+	}
+	return reply, nil
+}
+
 func parseGossipReply(data []byte) (*GossipReply, error) {
 	reply := &GossipReply{}
 	err := json.Unmarshal(data, reply)
@@ -142,7 +171,15 @@ func (args *SetArgs) Json() ([]byte, error) {
 	return jsonBytes, nil
 }
 
-func (peer *Peer) ToString() string {
-	str := fmt.Sprintf("(%s:%d - %s)", peer.Host, peer.Port, peer.Name)
+func (p *Peer) String() string {
+	str := fmt.Sprintf("(%s:%d - %s)", p.Host, p.Port, p.Name)
 	return str
+}
+
+func (pl *PeerList) String() string {
+	peerStrs := make([]string, len(*pl))
+	for i, peer := range *pl {
+		peerStrs[i] = peer.String()
+	}
+	return fmt.Sprintf("[%v]", strings.Join(peerStrs, ", "))
 }
