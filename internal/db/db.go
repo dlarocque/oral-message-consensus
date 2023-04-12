@@ -30,14 +30,14 @@ func Make(self *Peer, peers []*Peer, data []string) *Db {
 
 	rand.Seed(time.Now().UnixNano())
 
-	Debug(dInfo, "Created DB node (%v, %v, %v) with %v peers", self.Host, self.Port, self.Name, len(peers))
+	Debug(dInfo, "Created DB node (%v, %v) with %v peers", self.Addr.IP, self.Name, self.Name, len(peers))
 	return db
 }
 
 func (db *Db) Start() {
 	// Start listening to peer messages on OS-assigned UDP port
 	Debug(dInfo, "Peer listener started")
-	addr, err := net.ResolveUDPAddr("udp", fmt.Sprintf(":%d", db.self.Port))
+	addr, err := net.ResolveUDPAddr("udp", fmt.Sprintf(":%d", db.self.Addr.Port))
 	if err != nil {
 		Debug(dError, "UDP: Error resolving address: %v", err)
 		return
@@ -49,9 +49,9 @@ func (db *Db) Start() {
 		return
 	}
 
-	localAddr := conn.LocalAddr().(*net.UDPAddr)
-	db.self.Port = localAddr.Port
-	fmt.Printf("Peer listener started on port %v\n", db.self.Port)
+	db.conn = conn
+
+	fmt.Printf("Peer listener started on port %v\n", db.self.Addr.Port)
 
 	// Asychronously handle peer messages
 	go db.peerListener(conn)
@@ -65,7 +65,7 @@ func (db *Db) Start() {
 	// Listen for incoming clients
 	fmt.Println("Listening for incoming CLI connections...")
 
-	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", db.self.Port+1000))
+	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", db.self.Addr.Port+1000))
 	if err != nil {
 		fmt.Println("An error occurred while starting the server:", err)
 		os.Exit(1)
@@ -154,8 +154,8 @@ func (db *Db) join() {
 	Debug(dInfo, "Attempting to join network")
 	args := &GossipArgs{
 		Command:   GOSSIP,
-		Host:      db.self.Host,
-		Port:      db.self.Port,
+		Host:      db.self.Addr.IP.String(),
+		Port:      db.self.Addr.Port,
 		Name:      db.self.Name,
 		MessageID: uuid.New(),
 	}
@@ -188,7 +188,7 @@ func (db *Db) join() {
 
 // Send data to a peer with mutex held
 func (db *Db) Send(peer *Peer, jsonData []byte) error {
-	_, err := peer.Conn.Write(jsonData)
+	_, err := db.conn.WriteToUDP(jsonData, peer.Addr)
 	if err != nil {
 		Debug(dError, "Error sending data to peer %s: %v", peer.String(), err)
 		return err
@@ -279,8 +279,8 @@ func (db *Db) peerListener(conn *net.UDPConn) {
 					// Reply to the new peer with our own information
 					reply := &GossipReply{
 						Command: GOSSIP_REPLY,
-						Host:    db.self.Host,
-						Port:    db.self.Port,
+						Host:    db.self.Addr.IP.String(),
+						Port:    db.self.Addr.Port,
 						Name:    db.self.Name,
 					}
 
@@ -345,7 +345,9 @@ func (db *Db) peerListener(conn *net.UDPConn) {
 
 				// Update the value in our database if the index is in bounds
 				if args.Index >= 0 && args.Index < 5 {
-					/*host, port := addr.IP.String(), remoteAddr.Port
+					// TODO: get remote address and check if any peer has it
+					host, port := addr.IP.String(), addr.Port
+					Debug(dPeer, "SET: host: %s, port: %d", host, port)
 					peerIdx := db.peerIdx(host, port)
 					if peerIdx > -1 {
 						db.data[args.Index] = args.Value
@@ -353,7 +355,6 @@ func (db *Db) peerListener(conn *net.UDPConn) {
 					} else {
 						Debug(dPeer, "Received SET from unknown peer at %s:%d", host, port)
 					}
-					*/
 				}
 			} else {
 				Debug(dPeer, "Received unknown command from peer")
@@ -369,7 +370,7 @@ func (db *Db) peerListener(conn *net.UDPConn) {
 func (db *Db) peerIdx(host string, port int) int {
 	peerIdx := -1
 	for idx, peer := range db.peers {
-		if peer.Host == host && peer.Port == port {
+		if peer.Addr.IP.String() == host && peer.Addr.Port == port {
 			peerIdx = idx
 		}
 	}
@@ -397,8 +398,8 @@ func (db *Db) gossipper() {
 		Debug(dGossip, "Sending Gossip messages to all peers")
 		args := &GossipArgs{
 			Command:   GOSSIP,
-			Host:      db.self.Host,
-			Port:      db.self.Port,
+			Host:      db.self.Addr.IP.String(),
+			Port:      db.self.Addr.Port,
 			Name:      db.self.Name,
 			MessageID: uuid.New(),
 		}

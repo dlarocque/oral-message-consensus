@@ -21,6 +21,7 @@ const (
 // State of the peer to peer distributed database
 type Db struct {
 	mu        sync.Mutex
+	conn      *net.UDPConn
 	self      *Peer       // The information of this peer
 	peers     PeerList    // Known active peers
 	data      []string    // Database of five values
@@ -30,11 +31,9 @@ type Db struct {
 
 // State of a peer in the network
 type Peer struct {
-	Host        string
-	Port        int
+	Addr        *net.UDPAddr
 	Name        string
 	Expires     time.Time
-	Conn        net.Conn
 	RecentValue string // Most recent value received from peer
 }
 
@@ -94,25 +93,10 @@ func (db *Db) ConnectWithPeer(host string, port int, name string) (*Peer, error)
 		return nil, err
 	}
 
-	lAddr := &net.UDPAddr{
-		Port: db.self.Port,
-	}
-
-	conn, err := net.DialUDP("udp", lAddr, rAddr)
-	if err != nil {
-		Debug(dError, "Error connecting:", err)
-		return nil, err
-	}
-
-	fmt.Printf("Connected:\nPort %d\n", conn.LocalAddr().(*net.UDPAddr).Port)
-
 	peer := &Peer{
-		Host: host,
-		Port: port,
-
+		Addr:        rAddr,
 		Name:        name,
 		Expires:     time.Now().Add(time.Minute * 2),
-		Conn:        conn,
 		RecentValue: "",
 	}
 

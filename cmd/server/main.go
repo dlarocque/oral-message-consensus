@@ -3,6 +3,7 @@ package main
 import (
 	"consensus/internal/db"
 	"fmt"
+	"net"
 	"os"
 	"strconv"
 )
@@ -33,10 +34,11 @@ func main() {
 		if err != nil {
 			fmt.Println("Invalid port number:", os.Args[1])
 		}
-
-		self = &db.Peer{Host: localIP, Port: port, Name: DB_NAME}
+		rAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", localIP, port))
+		self = &db.Peer{Addr: rAddr, Name: DB_NAME}
 	} else {
-		self = &db.Peer{Host: localIP, Port: 0, Name: DB_NAME}
+		rAddr, _ := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", localIP, 0))
+		self = &db.Peer{Addr: rAddr, Name: DB_NAME}
 	}
 
 	// Start up services
